@@ -91,6 +91,16 @@ const configureCors = () => {
  */
 const requireHttps = (req, res, next) => {
   if (process.env.NODE_ENV === 'production') {
+    // Exclude internal health checks, root probe, and loopback calls from HTTPS redirect
+    if (
+      req.path === '/api/health' ||
+      req.path === '/' ||
+      req.hostname === 'localhost' ||
+      req.hostname === '127.0.0.1' ||
+      req.hostname === '0.0.0.0'
+    ) {
+      return next();
+    }
     const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
     if (!isHttps) {
       return res.redirect(301, `https://${req.headers.host}${req.url}`);

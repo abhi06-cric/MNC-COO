@@ -102,13 +102,24 @@ app.use(notFoundHandler);
 // Centralized Enterprise Error Handler
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5001;
+// Safely parse and sanitize PORT to prevent invalid strings or socket paths
+const parsePort = (val, fallback = 5001) => {
+  if (!val) return fallback;
+  const num = Number(val);
+  if (Number.isInteger(num) && num > 0 && num <= 65535) {
+    return num;
+  }
+  console.warn(`[PORT CONFIG WARNING] Invalid PORT environment variable value "${val}". Falling back to default port ${fallback}.`);
+  return fallback;
+};
 
-// Start Server
-const server = app.listen(PORT, () => {
+const PORT = parsePort(process.env.PORT, 5001);
+
+// Start Server binding to 0.0.0.0 for containerized environments
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n======================================================`);
   console.log(`🛡️  MNC PORTAL ENTERPRISE API SERVER STARTED`);
-  console.log(`🌐  URL: http://localhost:${PORT}`);
+  console.log(`🌐  URL: http://0.0.0.0:${PORT}`);
   console.log(`⚙️   ENVIRONMENT: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔒  SECURITY: Helmet + CORS + RateLimit + HttpOnly Cookies + CSRF + Audit`);
   console.log(`======================================================\n`);
