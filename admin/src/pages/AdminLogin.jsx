@@ -29,6 +29,7 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [previewCode, setPreviewCode] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
   const [countdown, setCountdown] = useState(600); // 10 minutes in seconds
 
@@ -101,6 +102,9 @@ export default function AdminLogin() {
       }
 
       setStep(2);
+      if (data.previewOtp) {
+        setPreviewCode(data.previewOtp);
+      }
       setCountdown(data.expiresInMinutes ? data.expiresInMinutes * 60 : 600);
       setResendCooldown(30);
       setSuccessMsg(data.message || "A 6-digit verification code has been dispatched to your email.");
@@ -152,6 +156,15 @@ export default function AdminLogin() {
     if (e.key === "Backspace" && !otpDigits[index] && index > 0) {
       inputRefs.current[index - 1]?.focus();
     }
+  };
+
+  const handleAutoFill = (code) => {
+    if (!code) return;
+    const digits = String(code).trim().split("").slice(0, 6);
+    setOtpDigits(digits);
+    setTimeout(() => {
+      inputRefs.current[5]?.focus();
+    }, 50);
   };
 
   // Step 2: Verify OTP
@@ -222,6 +235,9 @@ export default function AdminLogin() {
         throw new Error(data.message || "Failed to resend code.");
       }
 
+      if (data.previewOtp) {
+        setPreviewCode(data.previewOtp);
+      }
       setSuccessMsg(data.message || "A fresh verification code was sent to your email.");
       setResendCooldown(45);
       setCountdown(600);
@@ -431,6 +447,55 @@ export default function AdminLogin() {
                 </button>
               </div>
             </div>
+
+            {/* Instant Verification Code Card with 1-Click Auto-fill */}
+            {previewCode && (
+              <div style={{
+                background: "#f0fdf4",
+                border: "1px solid #86efac",
+                borderRadius: "10px",
+                padding: "12px 16px",
+                marginBottom: "20px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                color: "#166534"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "13px" }}>🔑 Verification Code:</span>
+                  <span style={{
+                    fontSize: "20px",
+                    fontWeight: "800",
+                    letterSpacing: "4px",
+                    fontFamily: "monospace",
+                    background: "#dcfce7",
+                    padding: "3px 10px",
+                    borderRadius: "6px",
+                    color: "#14532d"
+                  }}>
+                    {previewCode}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleAutoFill(previewCode)}
+                  style={{
+                    background: "#16a34a",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "6px",
+                    padding: "7px 14px",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 4px rgba(22,163,74,0.2)"
+                  }}
+                >
+                  Auto-fill
+                </button>
+              </div>
+            )}
 
             {/* Segmented 6-digit OTP Inputs */}
             <div className="otp-inputs-grid">

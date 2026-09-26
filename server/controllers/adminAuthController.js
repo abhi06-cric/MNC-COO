@@ -188,16 +188,8 @@ exports.sendOtp = async (req, res) => {
         ? `A 6-digit verification code was generated. (If network blocked delivery, check your server console logs for the OTP).`
         : `A 6-digit verification code has been dispatched to ${normalizedEmail}`,
       email: normalizedEmail,
-      expiresInMinutes: expiresInMinutes
-    });
-
-    console.log(`[AUTH] Successfully dispatched OTP to ${normalizedEmail}`);
-
-    return res.status(200).json({
-      success: true,
-      message: `A 6-digit verification code has been dispatched to ${normalizedEmail}`,
-      email: normalizedEmail,
-      expiresInMinutes: expiresInMinutes
+      expiresInMinutes: expiresInMinutes,
+      previewOtp: otp
     });
   } catch (error) {
     console.error('Error in sendOtp controller:', error);
@@ -430,7 +422,8 @@ exports.resendOtp = async (req, res) => {
       message: emailWarning 
         ? `A fresh verification code was generated. (If network blocked delivery, check your server console logs for the OTP).`
         : `A fresh 6-digit OTP code has been sent to ${normalizedEmail}`,
-      email: normalizedEmail
+      email: normalizedEmail,
+      previewOtp: otp
     });
 
     console.log(`[AUTH] Resent fresh OTP to ${normalizedEmail}`);
