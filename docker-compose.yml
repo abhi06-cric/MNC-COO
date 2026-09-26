@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # MongoDB Production Database Container
+  mongodb:
+    image: mongo:7.0
+    container_name: mnc_portal_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: mnc_portal
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - mnc_network
+
+  # Backend Enterprise API Service
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: mnc_portal_server
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongodb:27017/mnc_portal
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174
+      - JWT_SECRET=prod_super_secure_jwt_secret_key_mnc_982348219034
+      - COOKIE_SECRET=prod_secure_cookie_vault_key_19283019283
+    depends_on:
+      - mongodb
+    networks:
+      - mnc_network
+
+volumes:
+  mongo_data:
+    driver: local
+
+networks:
+  mnc_network:
+    driver: bridge

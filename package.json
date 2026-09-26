@@ -1,0 +1,21 @@
+{
+  "name": "mnc-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MNC Portal Application",
+  "scripts": {
+    "dev": "concurrently -n \"server,client,admin\" -c \"blue,green,magenta\" \"npm run server\" \"npm run client\" \"npm run admin\"",
+    "client": "npm --prefix client run dev",
+    "admin": "npm --prefix admin run dev",
+    "server": "npm --prefix server run dev",
+    "start": "npm --prefix server start",
+    "build": "npm --prefix client run build && npm --prefix admin run build"
+  },
+  "dependencies": {
+    "mongod": "^2.0.0",
+    "mongodb": "^7.6.0"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
