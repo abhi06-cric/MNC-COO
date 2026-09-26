@@ -31,9 +31,9 @@ function createTransporter(options = {}) {
       port: port,
       secure: secure,
       pool: false, // DO NOT pool: prevents stale idle socket timeouts
-      connectionTimeout: 15000, // 15s connection timeout
-      greetingTimeout: 15000,
-      socketTimeout: 20000,
+      connectionTimeout: 12000, // 12s connection timeout
+      greetingTimeout: 12000,
+      socketTimeout: 15000,
       auth: {
         user: user.trim(),
         pass: pass
@@ -49,8 +49,10 @@ function createTransporter(options = {}) {
 
 /**
  * Sends a 6-digit OTP code to the specified email.
- * Includes automatic retry on alternative port (465 -> 587) and fallback mode
- * so administrators are never blocked by cloud network firewall restrictions.
+ * Supports:
+ * 1. HTTPS REST API (Resend) if RESEND_API_KEY is configured (ideal for Render/Railway where SMTP ports are blocked).
+ * 2. Google Gmail SMTP via Port 465 (SSL) with automatic fallback to Port 587 (STARTTLS).
+ * 3. Graceful fallback logging to server console so the admin is NEVER locked out by cloud firewall restrictions.
  */
 async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
   const user = process.env.GOOGLE_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER;
@@ -124,7 +126,43 @@ async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
     html: htmlContent
   };
 
-  // Attempt 1: Direct SSL on Port 465
+  // 1. Try HTTPS API delivery if RESEND_API_KEY is configured (never blocked by cloud firewalls)
+  if (process.env.RESEND_API_KEY) {
+    try {
+      console.log('[Email Dispatch] Attempting delivery via Resend HTTPS API (Port 443)...');
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.RESEND_API_KEY.trim()}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: process.env.RESEND_FROM || 'MNC Admin <onboarding@resend.dev>',
+          to: [toEmail],
+          subject: mailOptions.subject,
+          html: mailOptions.html
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[Email Dispatch] ✓ Delivered via Resend API! ID: ${data.id}`);
+        return {
+          success: true,
+          messageId: data.id,
+          deliveredVia: 'resend_https_api',
+          toEmail
+        };
+      } else {
+        const errText = await res.text();
+        console.warn(`[Email Dispatch] Resend API returned ${res.status}: ${errText}`);
+      }
+    } catch (resendErr) {
+      console.warn(`[Email Dispatch] Resend API error: ${resendErr.message}`);
+    }
+  }
+
+  // 2. Attempt: Direct SSL on Port 465
   let primaryTransporter = createTransporter({ host: 'smtp.gmail.com', port: 465, secure: true });
   if (primaryTransporter) {
     try {
@@ -142,7 +180,7 @@ async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
     }
   }
 
-  // Attempt 2: Alternative STARTTLS on Port 587
+  // 3. Attempt: Alternative STARTTLS on Port 587
   let fallbackTransporter = createTransporter({ host: 'smtp.gmail.com', port: 587, secure: false });
   if (fallbackTransporter) {
     try {
@@ -156,39 +194,20 @@ async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
         toEmail
       };
     } catch (err587) {
-      console.warn(`[SMTP Warning] Port 587 attempt failed: ${err587.message}`);
+      console.warn(`[SMTP Warning] Port 587 attempt failed (${err587.message}).`);
     }
   }
 
-  // Attempt 3: Ethereal test account fallback (for offline local development)
-  try {
-    console.log('[SMTP Fallback] Creating virtual Ethereal test account...');
-    const etherealAccount = await nodemailer.createTestAccount();
-    const testTransporter = nodemailer.createTransport({
-      host: etherealAccount.smtp.host,
-      port: etherealAccount.smtp.port,
-      secure: etherealAccount.smtp.secure,
-      auth: {
-        user: etherealAccount.user,
-        pass: etherealAccount.pass
-      }
-    });
+  // 4. Graceful Fallback: Cloud hosting (e.g. Render Free Tier) blocked outbound SMTP
+  console.warn(`\n[SMTP NOTICE] Cloud hosting environment appears to block outbound SMTP ports (465/587).`);
+  console.warn(`🔑 [ACTIONABLE] Use the verification code printed above to complete your login in the admin console.\n`);
 
-    const info = await testTransporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    console.log(`[SMTP Fallback] ✓ Sent via Ethereal test inbox. Preview link: ${previewUrl}`);
-
-    return {
-      success: true,
-      messageId: info.messageId,
-      previewUrl,
-      deliveredVia: 'ethereal',
-      toEmail
-    };
-  } catch (etherealErr) {
-    console.error(`[SMTP Fatal] All delivery mechanisms failed:`, etherealErr.message);
-    throw new Error('Email dispatch timeout. Please check your network or view the generated OTP in your server logs.');
-  }
+  return {
+    success: false,
+    deliveredVia: 'server_logs',
+    warning: 'Cloud host blocked outbound SMTP ports. OTP code is available in server console logs.',
+    toEmail
+  };
 }
 
 module.exports = {

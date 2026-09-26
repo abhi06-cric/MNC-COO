@@ -148,39 +148,47 @@ exports.sendOtp = async (req, res) => {
       attempts: 0
     });
 
-    // Send OTP via SMTP protocol
+    // Send OTP via SMTP or HTTPS email protocols with resilient fallback
+    let emailResult = null;
+    let emailWarning = null;
+
     try {
-      await sendOtpEmail({
+      emailResult = await sendOtpEmail({
         toEmail: normalizedEmail,
         otp: otp,
         expiresInMinutes: expiresInMinutes
       });
+      if (emailResult && !emailResult.success) {
+        emailWarning = emailResult.warning || 'Cloud host firewall restricted direct SMTP ports.';
+      }
     } catch (smtpError) {
-      console.error('[SMTP Error] Failed to send email via SMTP:', smtpError);
-      
-      await AuditLog.record({
-        action: 'AUTH_SMTP_DELIVERY_FAILED',
-        status: 'FAILURE',
-        ip,
-        userAgent,
-        actor: { email: normalizedEmail, role: 'admin' },
-        details: { error: smtpError.message }
-      });
-
-      return res.status(500).json({
-        success: false,
-        message: `Failed to send verification email: ${smtpError.message}. Please verify your email configuration.`
-      });
+      console.warn('[SMTP Warning] Failed to deliver email via SMTP:', smtpError.message);
+      emailWarning = smtpError.message;
     }
 
-    // Record successful OTP dispatch
+    // Record OTP dispatch in Audit Logs
     await AuditLog.record({
       action: 'AUTH_OTP_DISPATCHED',
-      status: 'SUCCESS',
+      status: emailWarning ? 'WARNING' : 'SUCCESS',
       ip,
       userAgent,
       actor: { email: normalizedEmail, role: 'admin' },
-      details: { expiresInMinutes }
+      details: { 
+        expiresInMinutes, 
+        deliveryChannel: emailResult?.deliveredVia || 'fallback',
+        warning: emailWarning 
+      }
+    });
+
+    console.log(`[AUTH] Verification code generated for ${normalizedEmail}. Delivery channel: ${emailResult?.deliveredVia || 'fallback'}`);
+
+    return res.status(200).json({
+      success: true,
+      message: emailWarning 
+        ? `A 6-digit verification code was generated. (If network blocked delivery, check your server console logs for the OTP).`
+        : `A 6-digit verification code has been dispatched to ${normalizedEmail}`,
+      email: normalizedEmail,
+      expiresInMinutes: expiresInMinutes
     });
 
     console.log(`[AUTH] Successfully dispatched OTP to ${normalizedEmail}`);
@@ -385,26 +393,44 @@ exports.resendOtp = async (req, res) => {
     existingRecord.expiresAt = expiresAt;
     await existingRecord.save();
 
+    let emailResult = null;
+    let emailWarning = null;
+
     try {
-      await sendOtpEmail({
+      emailResult = await sendOtpEmail({
         toEmail: normalizedEmail,
         otp: otp,
         expiresInMinutes: expiresInMinutes
       });
+      if (emailResult && !emailResult.success) {
+        emailWarning = emailResult.warning;
+      }
     } catch (smtpError) {
-      return res.status(500).json({
-        success: false,
-        message: `SMTP Protocol failed to send verification email: ${smtpError.message}`
-      });
+      console.warn('[SMTP Warning] Failed to resend email via SMTP:', smtpError.message);
+      emailWarning = smtpError.message;
     }
 
     await AuditLog.record({
       action: 'AUTH_OTP_RESENT',
-      status: 'SUCCESS',
+      status: emailWarning ? 'WARNING' : 'SUCCESS',
       ip,
       userAgent,
       actor: { email: normalizedEmail, role: 'admin' },
-      details: { expiresInMinutes }
+      details: { 
+        expiresInMinutes, 
+        deliveryChannel: emailResult?.deliveredVia || 'fallback',
+        warning: emailWarning 
+      }
+    });
+
+    console.log(`[AUTH] Resent OTP to ${normalizedEmail}`);
+
+    return res.status(200).json({
+      success: true,
+      message: emailWarning 
+        ? `A fresh verification code was generated. (If network blocked delivery, check your server console logs for the OTP).`
+        : `A fresh 6-digit OTP code has been sent to ${normalizedEmail}`,
+      email: normalizedEmail
     });
 
     console.log(`[AUTH] Resent fresh OTP to ${normalizedEmail}`);
