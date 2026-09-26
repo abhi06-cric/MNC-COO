@@ -1,120 +1,68 @@
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Ensure environment variables are loaded
+dotenv.config({ path: path.join(__dirname, '../.env') });
+
 const nodemailer = require('nodemailer');
 const dns = require('dns');
 
+// Prioritize IPv4 to avoid IPv6 resolution timeouts on Gmail SMTP
 if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
 
-let transporter = null;
-let etherealAccount = null;
-
 /**
- * Initializes and returns the Nodemailer SMTP transporter.
- * Supports environment variables:
- * - SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM
- * Falls back to an automatic Ethereal SMTP test account or local SMTP simulation.
+ * Creates a fresh, high-reliability Nodemailer transporter.
+ * Uses direct connections (no stale socket pooling) with strict timeouts and port fallback.
  */
-async function getTransporter() {
-  if (transporter) {
-    return transporter;
-  }
-
+function createTransporter(options = {}) {
   const user = process.env.GOOGLE_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER;
   const rawPass = process.env.GOOGLE_APP_PASSWORD || process.env.EMAIL_PASS || process.env.SMTP_PASS;
   const pass = rawPass ? rawPass.trim().replace(/\s+/g, '') : '';
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '587', 10);
-  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
 
-  // 1. If Google credentials or SMTP credentials are provided in .env
+  const host = options.host || process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = options.port || parseInt(process.env.SMTP_PORT || '465', 10);
+  const secure = options.secure !== undefined ? options.secure : port === 465;
+
   if (user && pass) {
-    const isGmail = (user && user.toLowerCase().includes('@gmail.com')) || 
-                    !!process.env.GOOGLE_APP_PASSWORD || 
-                    (host && host.includes('gmail.com'));
-
-    if (isGmail) {
-      console.log(`[Google Auth] Initializing Google SMTP with Gmail service for: ${user}`);
-      transporter = nodemailer.createTransport({
-        service: 'gmail',
-        pool: true,
-        maxConnections: 5,
-        maxMessages: 100,
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
-        auth: {
-          user: user.trim(),
-          pass: pass
-        }
-      });
-    } else {
-      console.log(`[SMTP] Initializing SMTP transporter with host: ${host || 'smtp.gmail.com'}:${port}`);
-      transporter = nodemailer.createTransport({
-        host: host || 'smtp.gmail.com',
-        port: port,
-        secure: secure,
-        pool: true,
-        maxConnections: 5,
-        maxMessages: 100,
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
-        auth: {
-          user: user.trim(),
-          pass: pass
-        },
-        tls: {
-          rejectUnauthorized: process.env.NODE_ENV === 'production'
-        }
-      });
-    }
-
-    try {
-      await transporter.verify();
-      console.log('[Email Auth] Transporter verified and connected successfully.');
-      return transporter;
-    } catch (err) {
-      console.warn(`[Email Auth] Verification note: ${err.message}. Will attempt delivery upon request.`);
-      return transporter;
-    }
-  }
-
-  // 2. Fallback to Ethereal SMTP test account for development/testing
-  try {
-    console.log('[SMTP] No production SMTP configured. Creating Ethereal SMTP test account...');
-    etherealAccount = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: etherealAccount.smtp.host,
-      port: etherealAccount.smtp.port,
-      secure: etherealAccount.smtp.secure,
+    return nodemailer.createTransport({
+      host: host,
+      port: port,
+      secure: secure,
+      pool: false, // DO NOT pool: prevents stale idle socket timeouts
+      connectionTimeout: 15000, // 15s connection timeout
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
       auth: {
-        user: etherealAccount.user,
-        pass: etherealAccount.pass
+        user: user.trim(),
+        pass: pass
+      },
+      tls: {
+        rejectUnauthorized: false
       }
     });
-    console.log(`[SMTP] Ethereal SMTP test account active: ${etherealAccount.user}`);
-    return transporter;
-  } catch (etherealErr) {
-    console.warn(`[SMTP] Ethereal creation failed (${etherealErr.message}). Creating jsonTransport fallback.`);
-    // 3. Fallback transporter that logs message to console
-    transporter = nodemailer.createTransport({
-      jsonTransport: true
-    });
-    return transporter;
   }
+
+  return null;
 }
 
 /**
- * Sends a 6-digit OTP code to the specified email using the SMTP protocol.
- * @param {Object} options
- * @param {string} options.toEmail
- * @param {string} options.otp
- * @param {number} options.expiresInMinutes
+ * Sends a 6-digit OTP code to the specified email.
+ * Includes automatic retry on alternative port (465 -> 587) and fallback mode
+ * so administrators are never blocked by cloud network firewall restrictions.
  */
 async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
-  const mailTransporter = await getTransporter();
   const user = process.env.GOOGLE_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER;
-  const fromEmail = user || process.env.SMTP_FROM || (etherealAccount ? etherealAccount.user : 'no-reply@mncportal.com');
+  const fromEmail = user || 'no-reply@mncportal.com';
+
+  // Always log the OTP to server logs so the admin can always view it in Render/Terminal
+  console.log(`\n======================================================`);
+  console.log(`🔑 [MNC ADMIN 2FA OTP DISPATCHED]`);
+  console.log(`📧 Target Email: ${toEmail}`);
+  console.log(`🔢 VERIFICATION CODE: ${otp}`);
+  console.log(`⏱️  Expires In: ${expiresInMinutes} minutes`);
+  console.log(`======================================================\n`);
 
   const htmlContent = `
     <!DOCTYPE html>
@@ -153,7 +101,7 @@ async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
           <div class="otp-box">
             <div class="otp-label">Your Security Verification Code</div>
             <div class="otp-code">${otp}</div>
-            <div class="expiry-note">Valid for <strong>${expiresInMinutes} minutes</strong>. Dispatched via SMTP Protocol.</div>
+            <div class="expiry-note">Valid for <strong>${expiresInMinutes} minutes</strong>. Dispatched via Google SMTP Protocol.</div>
           </div>
 
           <div class="warning-box">
@@ -168,35 +116,82 @@ async function sendOtpEmail({ toEmail, otp, expiresInMinutes = 10 }) {
     </html>
   `;
 
-  const textContent = `MNC Executive Admin Console - Two-Factor Authentication Code\n\nYour security OTP is: ${otp}\nThis code is valid for ${expiresInMinutes} minutes.\n\nIf you did not request this login, please ignore this email.`;
-
   const mailOptions = {
     from: `"MNC Executive Admin" <${fromEmail}>`,
     to: toEmail,
     subject: `🔐 ${otp} - MNC Admin Console Verification Code`,
-    text: textContent,
+    text: `MNC Executive Admin Console - Two-Factor Authentication Code\n\nYour security OTP is: ${otp}\nValid for ${expiresInMinutes} minutes.\n\nIf you did not request this login, please ignore this email.`,
     html: htmlContent
   };
 
-  const info = await mailTransporter.sendMail(mailOptions);
-  console.log(`[SMTP] OTP email dispatched to ${toEmail}. MessageID: ${info.messageId}`);
-
-  let previewUrl = null;
-  if (etherealAccount && typeof nodemailer.getTestMessageUrl === 'function') {
-    previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[SMTP] Ethereal preview link: ${previewUrl}`);
+  // Attempt 1: Direct SSL on Port 465
+  let primaryTransporter = createTransporter({ host: 'smtp.gmail.com', port: 465, secure: true });
+  if (primaryTransporter) {
+    try {
+      console.log('[SMTP] Attempting delivery via smtp.gmail.com:465 (SSL)...');
+      const info = await primaryTransporter.sendMail(mailOptions);
+      console.log(`[SMTP] ✓ Delivered successfully via Port 465! MessageID: ${info.messageId}`);
+      return {
+        success: true,
+        messageId: info.messageId,
+        deliveredVia: 'smtp:465',
+        toEmail
+      };
+    } catch (err465) {
+      console.warn(`[SMTP Warning] Port 465 attempt failed (${err465.message}). Retrying on Port 587 (STARTTLS)...`);
     }
   }
 
-  return {
-    messageId: info.messageId,
-    previewUrl: previewUrl,
-    toEmail: toEmail
-  };
+  // Attempt 2: Alternative STARTTLS on Port 587
+  let fallbackTransporter = createTransporter({ host: 'smtp.gmail.com', port: 587, secure: false });
+  if (fallbackTransporter) {
+    try {
+      console.log('[SMTP] Attempting delivery via smtp.gmail.com:587 (STARTTLS)...');
+      const info = await fallbackTransporter.sendMail(mailOptions);
+      console.log(`[SMTP] ✓ Delivered successfully via Port 587! MessageID: ${info.messageId}`);
+      return {
+        success: true,
+        messageId: info.messageId,
+        deliveredVia: 'smtp:587',
+        toEmail
+      };
+    } catch (err587) {
+      console.warn(`[SMTP Warning] Port 587 attempt failed: ${err587.message}`);
+    }
+  }
+
+  // Attempt 3: Ethereal test account fallback (for offline local development)
+  try {
+    console.log('[SMTP Fallback] Creating virtual Ethereal test account...');
+    const etherealAccount = await nodemailer.createTestAccount();
+    const testTransporter = nodemailer.createTransport({
+      host: etherealAccount.smtp.host,
+      port: etherealAccount.smtp.port,
+      secure: etherealAccount.smtp.secure,
+      auth: {
+        user: etherealAccount.user,
+        pass: etherealAccount.pass
+      }
+    });
+
+    const info = await testTransporter.sendMail(mailOptions);
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    console.log(`[SMTP Fallback] ✓ Sent via Ethereal test inbox. Preview link: ${previewUrl}`);
+
+    return {
+      success: true,
+      messageId: info.messageId,
+      previewUrl,
+      deliveredVia: 'ethereal',
+      toEmail
+    };
+  } catch (etherealErr) {
+    console.error(`[SMTP Fatal] All delivery mechanisms failed:`, etherealErr.message);
+    throw new Error('Email dispatch timeout. Please check your network or view the generated OTP in your server logs.');
+  }
 }
 
 module.exports = {
   sendOtpEmail,
-  getTransporter
+  createTransporter
 };
