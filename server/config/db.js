@@ -11,13 +11,12 @@ const connectDB = async (retries = 5, delay = 2500) => {
     process.exit(1);
   }
 
-  // Mongoose Production Options
+  // Modern Mongoose Production Options (clean, reliable, no deprecated family: 4 or eager minPoolSize)
   const mongooseOptions = {
-    serverSelectionTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 15000, // 15s to allow Atlas multi-region / cold start negotiation
     socketTimeoutMS: 45000,
     maxPoolSize: process.env.MONGO_MAX_POOL_SIZE ? parseInt(process.env.MONGO_MAX_POOL_SIZE, 10) : 10,
-    minPoolSize: 2,
-    family: 4, // Prioritize IPv4 to avoid DNS resolution latency/timeouts
+    minPoolSize: 0, // Avoid eager pool creation on startup which triggers handshake errors on secondary shards
     autoIndex: process.env.NODE_ENV !== 'production' // Avoid runtime performance penalty in production
   };
 
@@ -27,7 +26,7 @@ const connectDB = async (retries = 5, delay = 2500) => {
   });
 
   mongoose.connection.on('error', (err) => {
-    console.error('[MongoDB Error] Database connection error:', err.message);
+    console.warn('[MongoDB Network Warning] Connection error encountered:', err.message);
   });
 
   mongoose.connection.on('disconnected', () => {
